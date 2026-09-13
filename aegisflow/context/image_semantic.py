@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -130,6 +132,7 @@ class ImageSemanticAnalyzer:
         enabled: bool = True,
         model_name: str | None = None,
         pretrained: str | None = None,
+        result_cache_size: int = 32,
     ):
         env_enabled = os.getenv("AEGISFLOW_ENABLE_LOCAL_VISION", "1").strip().lower()
         self.enabled = bool(enabled) and env_enabled not in {"0", "false", "no", "off"}
@@ -141,11 +144,13 @@ class ImageSemanticAnalyzer:
             "AEGISFLOW_VISION_PRETRAINED",
             DEFAULT_VISION_PRETRAINED,
         )
+        self.result_cache_size = max(1, int(result_cache_size))
         self._model = None
         self._preprocess = None
         self._tokenizer = None
         self._category_text_features = None
         self._load_error: str | None = None
+        self._result_cache: OrderedDict[str, VisionEvidence] = OrderedDict()
 
     def _load(self):
         if not self.enabled:
@@ -195,6 +200,18 @@ class ImageSemanticAnalyzer:
 
         return True
 
+    def _cache_get(self, content_hash: str) -> VisionEvidence | None:
+        cached = self._result_cache.get(content_hash)
+        if cached is not None:
+            self._result_cache.move_to_end(content_hash)
+        return cached
+
+    def _cache_put(self, content_hash: str, evidence: VisionEvidence) -> None:
+        self._result_cache[content_hash] = evidence
+        self._result_cache.move_to_end(content_hash)
+        while len(self._result_cache) > self.result_cache_size:
+            self._result_cache.popitem(last=False)
+
     def analyze(self, content: bytes) -> VisionEvidence:
         if not self.enabled:
             return VisionEvidence(
@@ -202,6 +219,16 @@ class ImageSemanticAnalyzer:
                 status="disabled",
                 category_scores={},
                 top_labels=[],
+            )
+
+        content_hash = hashlib.sha256(content).hexdigest()
+        cached = self._cache_get(content_hash)
+        if cached is not None:
+            return VisionEvidence(
+                used=cached.used,
+                status=f"{cached.status};cache=hit",
+                category_scores=dict(cached.category_scores),
+                top_labels=list(cached.top_labels),
             )
 
         try:
@@ -276,12 +303,14 @@ class ImageSemanticAnalyzer:
                 top_labels=[],
             )
 
-        return VisionEvidence(
+        evidence = VisionEvidence(
             used=True,
             status=(
                 f"active:openclip:{self.model_name}:{self.pretrained};"
-                f"gate={gate_status}"
+                f"gate={gate_status};cache=miss"
             ),
             category_scores=gated_scores,
             top_labels=top_labels,
         )
+        self._cache_put(content_hash, evidence)
+        return evidence
