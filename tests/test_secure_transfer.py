@@ -9,7 +9,7 @@ from aegisflow.security.secure_transfer import LocalRecipientKeyStore, SecureTra
 
 class ContentClassifierTests(unittest.TestCase):
     def test_financial_filename_is_detected(self):
-        classifier = ContentClassifier()
+        classifier = ContentClassifier(enable_vision=False)
         result = classifier.classify(
             filename="laporan_transaksi_bank.txt",
             content=b"monthly transaction report",
@@ -19,7 +19,7 @@ class ContentClassifierTests(unittest.TestCase):
         self.assertGreater(result.integrity, 0.9)
 
     def test_credential_content_is_detected(self):
-        classifier = ContentClassifier()
+        classifier = ContentClassifier(enable_vision=False)
         result = classifier.classify(
             filename="config.txt",
             content=b"api_key = super-secret-value\npassword = example",
@@ -27,6 +27,31 @@ class ContentClassifierTests(unittest.TestCase):
         )
         self.assertEqual(result.category, "credentials")
         self.assertGreater(result.confidentiality, 0.95)
+
+    def test_public_registration_poster_is_not_treated_as_sensitive_binary_text(self):
+        classifier = ContentClassifier(enable_vision=False)
+        # The literal credential-looking bytes intentionally simulate image metadata
+        # or compressed binary coincidences. An image must not be UTF-8 scanned as
+        # plaintext merely because decoding with errors="ignore" happens to work.
+        fake_png = b"\x89PNG\r\n\x1a\n\x00\xffpassword = not-actual-plaintext\x00"
+        result = classifier.classify(
+            filename="poster_pendaftaran_acara.png",
+            content=fake_png,
+            mime_type="image/png",
+        )
+        self.assertEqual(result.category, "public")
+        self.assertLess(result.sensitivity, 0.4)
+        self.assertIn("binary_content:not_text_scanned", result.signals)
+
+    def test_bts_tower_photo_defaults_to_general_context_without_vision(self):
+        classifier = ContentClassifier(enable_vision=False)
+        result = classifier.classify(
+            filename="foto_bts_tower.jpg",
+            content=b"\xff\xd8\xff\xe0binary-image-data",
+            mime_type="image/jpeg",
+        )
+        self.assertEqual(result.category, "general")
+        self.assertLess(result.confidentiality, 0.6)
 
 
 class SecureTransferTests(unittest.TestCase):
