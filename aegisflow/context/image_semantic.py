@@ -3,24 +3,58 @@ from __future__ import annotations
 import io
 import os
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
-DEFAULT_VISION_MODEL = "openai/clip-vit-base-patch32"
+DEFAULT_VISION_MODEL = "RN50"
+DEFAULT_VISION_PRETRAINED = "openai"
 
-# Human-readable zero-shot labels are intentionally broader than the policy
-# categories. The model judges visual semantics; AegisFlow then maps the result
-# into the normalized security-context categories used by the policy network.
-VISION_LABEL_TO_CATEGORY: Dict[str, str] = {
-    "a public event poster, registration flyer, announcement, or advertisement": "public",
-    "a telecommunications tower, antenna, building, landscape, or public infrastructure photo": "general",
-    "an identity card, passport, driver's license, or document containing personal identity data": "personal",
-    "a bank statement, payment receipt, invoice, credit card, or financial document": "financial",
-    "a medical record, prescription, laboratory result, or patient document": "medical",
-    "a screenshot or document containing passwords, API keys, private keys, tokens, or credentials": "credentials",
-    "an IoT device, sensor dashboard, telemetry screen, or industrial control interface": "iot",
-    "a private personal portrait, family photo, or image containing private personal information": "personal",
+# Prompt ensembles make the classifier less sensitive to one oddly-worded label.
+# The generic/icon prompts are important: without a benign alternative, a closed-set
+# CLIP classifier is forced to call even a lightning icon "financial" or "credentials"
+# simply because one of those prompts is the least-bad match.
+VISION_PROMPTS: Dict[str, Tuple[str, ...]] = {
+    "public": (
+        "a public event poster, flyer, banner, announcement, or advertisement",
+        "a public registration poster or promotional event graphic",
+    ),
+    "general": (
+        "a simple vector icon, logo, symbol, lightning bolt, or decorative graphic",
+        "a generic illustration, diagram, chart, screenshot, or non-sensitive graphic",
+        "a telecommunications tower, antenna, building, landscape, or public infrastructure photo",
+        "an ordinary non-sensitive photograph or image",
+    ),
+    "personal": (
+        "an identity card, passport, driver's license, or document containing personal identity data",
+        "a private personal portrait or image containing private personal information",
+    ),
+    "financial": (
+        "a bank statement, payment receipt, invoice, credit card, or financial document",
+        "a document showing financial transactions, banking details, or payment information",
+    ),
+    "medical": (
+        "a medical record, prescription, laboratory result, or patient document",
+        "a document or screenshot containing private health information",
+    ),
+    "credentials": (
+        "a screenshot or document containing passwords, API keys, private keys, tokens, or credentials",
+        "a secret authentication credential, password, access token, or cryptographic private key",
+    ),
+    "iot": (
+        "an IoT device, sensor dashboard, telemetry screen, or industrial control interface",
+        "a sensor, embedded device, telemetry dashboard, or machine control panel",
+    ),
 }
+
+SENSITIVE_CATEGORIES = {"credentials", "financial", "medical", "personal"}
+
+# Conservative deployment gate. Zero-shot softmax scores are relative similarities,
+# not calibrated security probabilities. A weak sensitive match must not be allowed
+# to drive HIGH/CRITICAL policy by itself.
+SENSITIVE_MIN_SCORE = 0.60
+SENSITIVE_MIN_MARGIN_OVER_BENIGN = 0.15
+IOT_MIN_SCORE = 0.55
+IOT_MIN_MARGIN_OVER_BENIGN = 0.12
 
 
 @dataclass(frozen=True)
@@ -31,14 +65,63 @@ class VisionEvidence:
     top_labels: List[Dict[str, object]]
 
 
+def gate_category_scores(
+    category_scores: Dict[str, float],
+) -> tuple[Dict[str, float], str]:
+    """Reject weak security-sensitive zero-shot matches.
+
+    CLIP/OpenCLIP always ranks the supplied prompts, even when none is a good semantic
+    fit. This gate makes the image path open-set-ish: a weak or ambiguous sensitive
+    result falls back to GENERAL instead of escalating the security policy.
+    """
+
+    if not category_scores:
+        return {}, "no_scores"
+
+    normalized = {
+        str(category): max(0.0, min(1.0, float(score)))
+        for category, score in category_scores.items()
+    }
+    top_category, top_score = max(normalized.items(), key=lambda item: item[1])
+    benign_best = max(
+        normalized.get("general", 0.0),
+        normalized.get("public", 0.0),
+    )
+    margin = top_score - benign_best
+
+    if top_category in SENSITIVE_CATEGORIES:
+        if (
+            top_score < SENSITIVE_MIN_SCORE
+            or margin < SENSITIVE_MIN_MARGIN_OVER_BENIGN
+        ):
+            adjusted = dict(normalized)
+            # Preserve diagnostic scores, but make the policy-facing winner benign.
+            adjusted[top_category] = min(adjusted[top_category], benign_best)
+            adjusted["general"] = max(
+                adjusted.get("general", 0.0),
+                min(0.55, max(0.30, top_score)),
+            )
+            return adjusted, f"rejected_weak_sensitive:{top_category}"
+
+    if top_category == "iot":
+        if top_score < IOT_MIN_SCORE or margin < IOT_MIN_MARGIN_OVER_BENIGN:
+            adjusted = dict(normalized)
+            adjusted["iot"] = min(adjusted["iot"], benign_best)
+            adjusted["general"] = max(
+                adjusted.get("general", 0.0),
+                min(0.55, max(0.30, top_score)),
+            )
+            return adjusted, "rejected_weak_iot"
+
+    return normalized, f"accepted:{top_category}"
+
+
 class ImageSemanticAnalyzer:
-    """Optional local zero-shot image semantic analyzer.
+    """Local OpenCLIP image semantic analyzer for AegisFlow.
 
-    The dependency is deliberately optional so the core AegisFlow pipeline can
-    still run without downloading a vision model. When ``transformers`` and
-    ``Pillow`` are installed, the model is loaded lazily on the first image.
-
-    No image bytes are sent to a cloud API by this class.
+    Default model: OpenCLIP RN50 with the OpenAI pretrained checkpoint. It is much
+    smaller than the previous ViT-B/32 checkpoint and remains fully local after the
+    checkpoint is downloaded. No image bytes are sent to a cloud inference API.
     """
 
     def __init__(
@@ -46,6 +129,7 @@ class ImageSemanticAnalyzer:
         *,
         enabled: bool = True,
         model_name: str | None = None,
+        pretrained: str | None = None,
     ):
         env_enabled = os.getenv("AEGISFLOW_ENABLE_LOCAL_VISION", "1").strip().lower()
         self.enabled = bool(enabled) and env_enabled not in {"0", "false", "no", "off"}
@@ -53,30 +137,63 @@ class ImageSemanticAnalyzer:
             "AEGISFLOW_VISION_MODEL",
             DEFAULT_VISION_MODEL,
         )
-        self._pipeline = None
+        self.pretrained = pretrained or os.getenv(
+            "AEGISFLOW_VISION_PRETRAINED",
+            DEFAULT_VISION_PRETRAINED,
+        )
+        self._model = None
+        self._preprocess = None
+        self._tokenizer = None
+        self._category_text_features = None
         self._load_error: str | None = None
 
-    def _get_pipeline(self):
+    def _load(self):
         if not self.enabled:
-            return None
-        if self._pipeline is not None:
-            return self._pipeline
+            return False
+        if self._model is not None:
+            return True
         if self._load_error is not None:
-            return None
+            return False
 
         try:
-            from transformers import pipeline
+            import open_clip
+            import torch
 
-            self._pipeline = pipeline(
-                task="zero-shot-image-classification",
-                model=self.model_name,
-                device=-1,
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                self.model_name,
+                pretrained=self.pretrained,
+                device="cpu",
             )
-        except Exception as exc:  # optional deployment dependency / first-run download
-            self._load_error = exc.__class__.__name__
-            return None
+            tokenizer = open_clip.get_tokenizer(self.model_name)
+            model.eval()
 
-        return self._pipeline
+            # Encode prompt ensembles once. Later images only need one image forward
+            # pass plus a tiny matrix multiplication.
+            category_text_features = {}
+            with torch.inference_mode():
+                for category, prompts in VISION_PROMPTS.items():
+                    tokens = tokenizer(list(prompts))
+                    text_features = model.encode_text(tokens)
+                    text_features = text_features / text_features.norm(
+                        dim=-1,
+                        keepdim=True,
+                    ).clamp_min(1e-12)
+                    category_vector = text_features.mean(dim=0, keepdim=True)
+                    category_vector = category_vector / category_vector.norm(
+                        dim=-1,
+                        keepdim=True,
+                    ).clamp_min(1e-12)
+                    category_text_features[category] = category_vector.cpu()
+
+            self._model = model
+            self._preprocess = preprocess
+            self._tokenizer = tokenizer
+            self._category_text_features = category_text_features
+        except Exception as exc:  # optional dependency / first-run checkpoint download
+            self._load_error = f"{exc.__class__.__name__}:{str(exc)[:120]}"
+            return False
+
+        return True
 
     def analyze(self, content: bytes) -> VisionEvidence:
         if not self.enabled:
@@ -97,12 +214,11 @@ class ImageSemanticAnalyzer:
                 top_labels=[],
             )
 
-        classifier = self._get_pipeline()
-        if classifier is None:
+        if not self._load():
             status = (
                 f"model_unavailable:{self._load_error}"
                 if self._load_error
-                else "transformers_not_installed"
+                else "openclip_not_installed"
             )
             return VisionEvidence(
                 used=False,
@@ -112,11 +228,46 @@ class ImageSemanticAnalyzer:
             )
 
         try:
+            import torch
+
             image = Image.open(io.BytesIO(content)).convert("RGB")
-            outputs = classifier(
-                image,
-                candidate_labels=list(VISION_LABEL_TO_CATEGORY.keys()),
+            image_tensor = self._preprocess(image).unsqueeze(0)
+
+            categories = list(self._category_text_features.keys())
+            text_matrix = torch.cat(
+                [self._category_text_features[category] for category in categories],
+                dim=0,
             )
+
+            with torch.inference_mode():
+                image_features = self._model.encode_image(image_tensor)
+                image_features = image_features / image_features.norm(
+                    dim=-1,
+                    keepdim=True,
+                ).clamp_min(1e-12)
+
+                logits = 100.0 * image_features.cpu() @ text_matrix.T
+                probabilities = logits.softmax(dim=-1)[0]
+
+            raw_scores = {
+                category: float(probabilities[index].item())
+                for index, category in enumerate(categories)
+            }
+            gated_scores, gate_status = gate_category_scores(raw_scores)
+
+            ordered = sorted(
+                raw_scores.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            top_labels = [
+                {
+                    "label": category,
+                    "category": category,
+                    "score": score,
+                }
+                for category, score in ordered[:4]
+            ]
         except Exception as exc:
             return VisionEvidence(
                 used=False,
@@ -125,33 +276,12 @@ class ImageSemanticAnalyzer:
                 top_labels=[],
             )
 
-        category_scores: Dict[str, float] = {}
-        top_labels: List[Dict[str, object]] = []
-
-        for item in outputs[:5]:
-            label = str(item.get("label", ""))
-            score = float(item.get("score", 0.0))
-            category = VISION_LABEL_TO_CATEGORY.get(label)
-            if not category:
-                continue
-
-            # Keep the strongest visual evidence for each category. Using max
-            # avoids double-counting multiple semantically similar prompt labels.
-            category_scores[category] = max(
-                category_scores.get(category, 0.0),
-                score,
-            )
-            top_labels.append(
-                {
-                    "label": label,
-                    "category": category,
-                    "score": score,
-                }
-            )
-
         return VisionEvidence(
             used=True,
-            status=f"active:{self.model_name}",
-            category_scores=category_scores,
-            top_labels=top_labels[:3],
+            status=(
+                f"active:openclip:{self.model_name}:{self.pretrained};"
+                f"gate={gate_status}"
+            ),
+            category_scores=gated_scores,
+            top_labels=top_labels,
         )
