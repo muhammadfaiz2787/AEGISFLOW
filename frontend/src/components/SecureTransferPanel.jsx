@@ -1,6 +1,7 @@
 import {
   CheckCircle2,
   Download,
+  Eye,
   FileKey2,
   FileSearch,
   LockKeyhole,
@@ -38,6 +39,25 @@ function levelClass(level) {
     default:
       return "border-slate-700 bg-slate-800 text-slate-300";
   }
+}
+
+
+function readableMode(mode) {
+  if (!mode) return "—";
+  if (mode.includes("hybrid_local_vision")) return "Local Vision + Metadata/Text";
+  if (mode.includes("fallback")) return "Metadata/Text Fallback";
+  return mode;
+}
+
+
+function readableVisionStatus(status) {
+  if (!status || status === "not_applicable") return "Not applicable";
+  if (status.startsWith("active:")) return "Active (local model)";
+  if (status === "disabled") return "Disabled";
+  if (status === "pillow_not_installed") return "Unavailable (Pillow missing)";
+  if (status.startsWith("model_unavailable:")) return "Unavailable (vision model/dependency)";
+  if (status.startsWith("image_analysis_failed:")) return "Image analysis failed";
+  return status;
 }
 
 
@@ -163,8 +183,9 @@ export default function SecureTransferPanel() {
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-400">
           Select a file. AegisFlow automatically detects its context, combines it with
           current network intelligence, selects LOW–CRITICAL protection, then encrypts
-          the file using the resolved cryptographic profile. You do not choose the data
-          category or encryption level manually.
+          the file using the resolved cryptographic profile. Images can be interpreted
+          with the optional local vision model, so a public poster is not treated like
+          private content merely because it is an image.
         </p>
       </div>
 
@@ -211,7 +232,7 @@ export default function SecureTransferPanel() {
               className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-blue-500/40 disabled:opacity-40"
             >
               <FileSearch className="h-4 w-4" />
-              Analyze Automatically
+              {busy ? "Analyzing..." : "Analyze Automatically"}
             </button>
             <button
               type="button"
@@ -257,7 +278,20 @@ export default function SecureTransferPanel() {
                 <InfoCard label="Confidence" value={`${((context?.confidence ?? 0) * 100).toFixed(1)}%`} />
                 <InfoCard label="Network Threat" value={`${((analysis?.network_context?.threat_score ?? 0) * 100).toFixed(1)}%`} />
                 <InfoCard label="Context Source" value={analysis?.network_context?.source ?? "—"} />
+                <InfoCard label="Content Intelligence" value={readableMode(context?.analysis_mode)} />
+                <InfoCard label="Image Vision" value={readableVisionStatus(context?.vision_status)} />
               </div>
+
+              {context?.detected_mime?.startsWith("image/") && (
+                <div className="flex items-start gap-3 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                  <Eye className="mt-0.5 h-5 w-5 shrink-0 text-blue-400" />
+                  <p className="text-xs leading-relaxed text-slate-400">
+                    Image classification uses visual semantics when the local vision model is active.
+                    If this card says vision is unavailable, install the optional vision dependencies;
+                    AegisFlow will otherwise use the safer metadata/filename fallback.
+                  </p>
+                </div>
+              )}
 
               <div className={`rounded-xl border p-4 ${levelClass(decision?.policy)}`}>
                 <p className="text-xs uppercase tracking-wider opacity-70">Selected Policy</p>
