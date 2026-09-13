@@ -59,7 +59,7 @@ class AdaptiveSecureTransfer:
         profile = resolve_security_profile(decision["policy"])
 
         return {
-            "classifier_mode": "automatic_metadata_and_bounded_text_v1",
+            "classifier_mode": content_context.analysis_mode,
             "content_context": content_context.to_dict(),
             "policy_context": policy_context,
             "decision": decision,
