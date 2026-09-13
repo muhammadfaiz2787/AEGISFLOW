@@ -1,3 +1,5 @@
+# Optional dependencies for local image semantic understanding.
+# Install with: pip install -r requirements-vision.txt
 -r requirements.txt
 pillow>=10.4
 transformers>=4.46
