@@ -59,13 +59,15 @@ To enable visual semantic understanding for images:
 pip install -r requirements-vision.txt
 ```
 
-The first image analysis may download the configured local model (`openai/clip-vit-base-patch32` by default). After installation, restart the FastAPI backend before testing images again.
+The first image analysis may download the configured local model (`openai/clip-vit-base-patch32` by default). That first analysis can therefore take noticeably longer than later image analyses. After installation, restart the FastAPI backend before testing images again.
 
 You can disable local vision explicitly with:
 
 ```powershell
 $env:AEGISFLOW_ENABLE_LOCAL_VISION="0"
 ```
+
+Without the optional vision dependencies, AegisFlow still uses the corrected v2 fallback: it does not scan binary image bytes as plaintext and it can use filename/MIME evidence such as `poster_pendaftaran_acara.png` or `foto_bts_tower.jpg`. The UI will explicitly show that local image vision is unavailable.
 
 ## Run the deployment prototype
 Backend:
