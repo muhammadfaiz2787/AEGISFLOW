@@ -52,12 +52,29 @@ function readableMode(mode) {
 
 function readableVisionStatus(status) {
   if (!status || status === "not_applicable") return "Not applicable";
+  if (status.startsWith("active:openclip:")) return "Active (OpenCLIP local)";
   if (status.startsWith("active:")) return "Active (local model)";
   if (status === "disabled") return "Disabled";
   if (status === "pillow_not_installed") return "Unavailable (Pillow missing)";
   if (status.startsWith("model_unavailable:")) return "Unavailable (vision model/dependency)";
   if (status.startsWith("image_analysis_failed:")) return "Image analysis failed";
   return status;
+}
+
+function readableVisionGate(status) {
+  if (!status) return "—";
+  const matched = status.match(/gate=([^;]+)/);
+  const gate = matched?.[1];
+  if (!gate) return "—";
+  if (gate.startsWith("accepted:")) {
+    return `Accepted: ${gate.split(":")[1]?.toUpperCase() ?? "UNKNOWN"}`;
+  }
+  if (gate.startsWith("rejected_weak_sensitive:")) {
+    return `Rejected weak ${gate.split(":")[1]?.toUpperCase() ?? "sensitive"} match`;
+  }
+  if (gate === "rejected_weak_iot") return "Rejected weak IoT match";
+  if (gate === "no_scores") return "No visual scores";
+  return gate;
 }
 
 
@@ -275,20 +292,26 @@ export default function SecureTransferPanel() {
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <InfoCard label="Detected Context" value={context?.category?.toUpperCase() ?? "—"} />
-                <InfoCard label="Confidence" value={`${((context?.confidence ?? 0) * 100).toFixed(1)}%`} />
+                <InfoCard
+                  label="Context Confidence"
+                  value={`${((context?.confidence ?? 0) * 100).toFixed(1)}% (heuristic)`}
+                />
                 <InfoCard label="Network Threat" value={`${((analysis?.network_context?.threat_score ?? 0) * 100).toFixed(1)}%`} />
                 <InfoCard label="Context Source" value={analysis?.network_context?.source ?? "—"} />
                 <InfoCard label="Content Intelligence" value={readableMode(context?.analysis_mode)} />
                 <InfoCard label="Image Vision" value={readableVisionStatus(context?.vision_status)} />
+                {context?.detected_mime?.startsWith("image/") && (
+                  <InfoCard label="Vision Security Gate" value={readableVisionGate(context?.vision_status)} />
+                )}
               </div>
 
               {context?.detected_mime?.startsWith("image/") && (
                 <div className="flex items-start gap-3 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
                   <Eye className="mt-0.5 h-5 w-5 shrink-0 text-blue-400" />
                   <p className="text-xs leading-relaxed text-slate-400">
-                    Image classification uses visual semantics when the local vision model is active.
-                    If this card says vision is unavailable, install the optional vision dependencies;
-                    AegisFlow will otherwise use the safer metadata/filename fallback.
+                    Image classification uses local OpenCLIP visual semantics when available. Sensitive
+                    visual matches must also pass a conservative security gate before they can escalate
+                    the policy. Context Confidence is a heuristic score, not a measured model accuracy.
                   </p>
                 </div>
               )}
