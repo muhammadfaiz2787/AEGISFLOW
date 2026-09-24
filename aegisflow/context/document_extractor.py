@@ -154,7 +154,9 @@ class DocumentTextExtractor:
         try:
             presentation = Presentation(io.BytesIO(content))
             parts: list[str] = []
-            for index, slide in enumerate(presentation.slides[: self.max_slides], start=1):
+            for index, slide in enumerate(presentation.slides, start=1):
+                if index > self.max_slides:
+                    break
                 parts.append(f"[Slide {index}]")
                 for shape in slide.shapes:
                     text = getattr(shape, "text", "")
