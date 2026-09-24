@@ -8,10 +8,8 @@
 
 mcp_servers:
   aegisflow:
-    command: "D:\\VS CODE\\aegisflow\\.venv\\Scripts\\python.exe"
-    args:
-      - "-m"
-      - "aegisflow.integrations.hermes_mcp"
+    command: "D:\\VS CODE\\aegisflow\\.venv\\Scripts\\aegisflow-hermes.exe"
+    args: []
     env:
       AEGISFLOW_API_BASE: "http://127.0.0.1:8000"
       AEGISFLOW_HERMES_ALLOWED_ROOT: "D:\\VS CODE\\aegisflow"
