@@ -103,6 +103,40 @@ class SecureTransferTests(unittest.TestCase):
             self.assertEqual(metadata["policy"], "HIGH")
             self.assertEqual(manifest["security_profile"]["data_cipher"], "AES-256-GCM")
 
+    def test_cross_device_recipient_public_key_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sender_keys = LocalRecipientKeyStore(root / "sender.pem")
+            receiver_keys = LocalRecipientKeyStore(root / "receiver.pem")
+            sender = SecureTransferService(key_store=sender_keys)
+            receiver = SecureTransferService(key_store=receiver_keys)
+
+            plaintext = b"cross-device AegisFlow payload"
+            profile = resolve_security_profile("HIGH")
+            envelope, manifest = sender.protect(
+                filename="shared.bin",
+                content=plaintext,
+                policy_name="HIGH",
+                profile=profile,
+                context={"category": "general", "confidence": 0.7},
+                recipient_public_key_b64=receiver_keys.public_key_b64(),
+            )
+
+            recovered, metadata = receiver.unprotect(envelope)
+            self.assertEqual(recovered, plaintext)
+            self.assertEqual(
+                manifest["recipient_public_key"],
+                receiver_keys.public_key_b64(),
+            )
+            self.assertEqual(
+                metadata["recipient_public_key"],
+                receiver_keys.public_key_b64(),
+            )
+
+            with self.assertRaises(Exception):
+                sender.unprotect(envelope)
+
+
     def test_modified_ciphertext_fails_authentication(self):
         with tempfile.TemporaryDirectory() as directory:
             key_store = LocalRecipientKeyStore(Path(directory) / "recipient.pem")
