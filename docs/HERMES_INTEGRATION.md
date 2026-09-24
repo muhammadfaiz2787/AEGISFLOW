@@ -18,7 +18,7 @@ application to Hermes internals.
 From the AegisFlow virtual environment:
 
 ```powershell
-pip install -r requirements-hermes.txt
+pip install -e ".[hermes]"
 ```
 
 Run AegisFlow first:
@@ -26,6 +26,8 @@ Run AegisFlow first:
 ```powershell
 uvicorn backend.main:app --reload
 ```
+
+The editable install creates the `aegisflow-hermes` entry point.
 
 Copy the `mcp_servers.aegisflow` block from:
 
