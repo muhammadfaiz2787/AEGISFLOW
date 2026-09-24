@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+from aegisflow.context.document_extractor import DocumentTextExtractor
 from aegisflow.context.image_semantic import ImageSemanticAnalyzer
 
 
@@ -27,6 +28,8 @@ class ContentContext:
     signals: List[str]
     analysis_mode: str
     vision_status: str
+    document_status: str = "not_applicable"
+    document_kind: str = "not_applicable"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -127,6 +130,7 @@ CATEGORY_KEYWORDS: Dict[str, Iterable[str]] = {
     "general": (
         "tower", "bts", "antenna", "telecom", "telecommunication", "telekomunikasi",
         "infrastructure", "infrastruktur", "building", "gedung", "landscape",
+        "logo", "icon", "ikon", "vector", "vektor", "symbol", "simbol",
     ),
     "financial": (
         "invoice", "rekening", "bank", "financial", "finance", "payment",
@@ -192,7 +196,7 @@ TEXT_EXTENSIONS = {
 
 FILENAME_WEIGHTS = {
     "public": 1.15,
-    "general": 0.70,
+    "general": 0.85,
     "financial": 0.90,
     "medical": 0.90,
     "credentials": 0.95,
@@ -202,14 +206,13 @@ FILENAME_WEIGHTS = {
 
 
 class ContentClassifier:
-    """Automatic application-context detector for AegisFlow Secure Transfer v2.
+    """Automatic content intelligence for AegisFlow Secure Transfer.
 
-    v2 fixes two important deployment problems from v1:
-    1. binary images are no longer decoded as if they were plaintext, and
-    2. images can optionally be inspected by a local zero-shot vision model.
-
-    The local vision path is optional. If its dependencies/model are unavailable,
-    classification gracefully falls back to filename, MIME, and safe text parsing.
+    The classifier deliberately combines several bounded local evidence sources:
+    filename/MIME hints, safe plaintext inspection, local office/PDF extraction,
+    and optional local OpenCLIP image semantics. Binary bytes are never decoded as
+    plaintext. Visual sensitive matches are already gated conservatively by the
+    image analyzer before they can affect the policy-facing category.
     """
 
     def __init__(
@@ -218,9 +221,13 @@ class ContentClassifier:
         *,
         enable_vision: bool = True,
         image_analyzer: ImageSemanticAnalyzer | None = None,
+        document_extractor: DocumentTextExtractor | None = None,
     ):
         self.max_text_sample_bytes = int(max_text_sample_bytes)
         self.image_analyzer = image_analyzer or ImageSemanticAnalyzer(enabled=enable_vision)
+        self.document_extractor = document_extractor or DocumentTextExtractor(
+            max_chars=max_text_sample_bytes
+        )
 
     @staticmethod
     def _clip01(value: float) -> float:
@@ -228,7 +235,6 @@ class ContentClassifier:
 
     @staticmethod
     def estimate_data_volume(size_bytes: int) -> float:
-        # Smoothly maps roughly 1 KiB -> 0.17, 1 MiB -> 0.52, 1 GiB -> 0.86.
         return ContentClassifier._clip01(math.log10(max(size_bytes, 1) + 1) / 9.0)
 
     @staticmethod
@@ -244,10 +250,43 @@ class ContentClassifier:
             "application/x-yaml",
         }
 
-    def classify(self, filename: str, content: bytes, mime_type: str | None = None) -> ContentContext:
+    @staticmethod
+    def _apply_text_evidence(
+        text: str,
+        scores: Dict[str, float],
+        signals: List[str],
+        *,
+        source: str,
+    ) -> None:
+        if not text:
+            return
+
+        lowered = text.lower()
+        for category, keywords in CATEGORY_KEYWORDS.items():
+            hits = sum(1 for keyword in keywords if keyword in lowered)
+            if hits:
+                scores[category] += min(1.8, 0.30 * hits)
+                signals.append(f"{source}_keywords:{category}:{hits}")
+
+        for category, patterns in PATTERN_HINTS.items():
+            hits = sum(1 for pattern in patterns if pattern.search(text))
+            if hits:
+                scores[category] += 1.40 * hits
+                signals.append(f"{source}_pattern:{category}:{hits}")
+
+    def classify(
+        self,
+        filename: str,
+        content: bytes,
+        mime_type: str | None = None,
+    ) -> ContentContext:
         safe_name = Path(filename or "unnamed.bin").name
         suffix = Path(safe_name).suffix.lower()
-        detected_mime = mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        detected_mime = (
+            mime_type
+            or mimetypes.guess_type(safe_name)[0]
+            or "application/octet-stream"
+        )
 
         scores: Dict[str, float] = {name: 0.0 for name in CATEGORY_REQUIREMENTS}
         scores["general"] = 0.15
@@ -266,31 +305,38 @@ class ContentClassifier:
                     signals.append(f"filename_keyword:{category}:{keyword}")
 
         text_candidate = self._is_text_candidate(detected_mime, suffix)
+        document_status = "not_applicable"
+        document_kind = "not_applicable"
+        document_used = False
+
         if text_candidate:
             sample = content[: self.max_text_sample_bytes]
             text = sample.decode("utf-8", errors="ignore")
-            lowered = text.lower()
-
-            if text:
-                for category, keywords in CATEGORY_KEYWORDS.items():
-                    hits = sum(1 for keyword in keywords if keyword in lowered)
-                    if hits:
-                        scores[category] += min(1.5, 0.30 * hits)
-                        signals.append(f"text_keywords:{category}:{hits}")
-
-                for category, patterns in PATTERN_HINTS.items():
-                    hits = sum(1 for pattern in patterns if pattern.search(text))
-                    if hits:
-                        scores[category] += 1.40 * hits
-                        signals.append(f"structured_pattern:{category}:{hits}")
+            self._apply_text_evidence(text, scores, signals, source="text")
+            signals.append("content:plaintext_scanned")
+        elif self.document_extractor.supports(safe_name, detected_mime):
+            extraction = self.document_extractor.extract(
+                safe_name,
+                content,
+                detected_mime,
+            )
+            document_status = extraction.status
+            document_kind = extraction.kind
+            document_used = bool(extraction.text)
+            signals.append(f"document:{extraction.kind}:{extraction.status}")
+            if extraction.text:
+                self._apply_text_evidence(
+                    extraction.text,
+                    scores,
+                    signals,
+                    source="document",
+                )
         else:
             signals.append("binary_content:not_text_scanned")
 
         vision_used = False
         vision_status = "not_applicable"
         if detected_mime.startswith("image/"):
-            # Images are not private merely because they are images. v1 added a
-            # personal-data bias here; v2 intentionally removes that assumption.
             scores["general"] += 0.20
             signals.append("mime:image")
 
@@ -300,14 +346,13 @@ class ContentClassifier:
 
             if evidence.used:
                 for category, score in evidence.category_scores.items():
-                    # Visual semantics are useful evidence, but filename / strong
-                    # structured signals can still dominate when appropriate.
                     if score >= 0.10:
                         scores[category] += 2.25 * score
 
                 for item in evidence.top_labels:
                     signals.append(
-                        "vision:%s:%.3f" % (
+                        "vision:%s:%.3f"
+                        % (
                             item["category"],
                             float(item["score"]),
                         )
@@ -333,19 +378,25 @@ class ContentClassifier:
         if not signals:
             signals.append("fallback:general_metadata")
 
-        analysis_mode = (
-            "hybrid_local_vision_metadata_text_v2"
-            if vision_used
-            else "metadata_text_fallback_v2"
-        )
+        modes: List[str] = []
+        if vision_used:
+            modes.append("local_openclip_vision")
+        if document_used:
+            modes.append("local_document_text")
+        if text_candidate:
+            modes.append("plaintext")
+        modes.append("metadata")
+        analysis_mode = "+".join(modes) + "_v3"
 
         return ContentContext(
             category=category,
             confidence=confidence,
             detected_mime=detected_mime,
             size_bytes=len(content),
-            signals=signals[:16],
+            signals=signals[:20],
             analysis_mode=analysis_mode,
             vision_status=vision_status,
+            document_status=document_status,
+            document_kind=document_kind,
             **requirements,
         )
