@@ -39,11 +39,19 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
     async def capabilities():
         service = orchestrator()
         return {
-            "mode": "adaptive_secure_transfer_v1",
+            "mode": "adaptive_secure_transfer_v3",
             "automatic_content_detection": True,
+            "content_intelligence": {
+                "text": True,
+                "images": "local OpenCLIP when optional vision dependencies are installed",
+                "documents": ["PDF", "DOCX", "XLSX", "PPTX"],
+                "binary_plaintext_scanning": False,
+            },
             "network_context_source": "live monitor when available; safe defaults otherwise",
             "max_upload_bytes": MAX_UPLOAD_BYTES,
             "recipient_public_key": service.crypto.key_store.public_key_b64(),
+            "remote_recipient_public_key_supported": True,
+            "hermes_mcp_ready": True,
             "important_scope": (
                 "This protects files explicitly sent through AegisFlow Secure Transfer. "
                 "It does not intercept or re-encrypt arbitrary browser/application traffic."
