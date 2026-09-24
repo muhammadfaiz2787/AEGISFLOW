@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   UploadCloud,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -91,6 +91,28 @@ export default function SecureTransferPanel() {
   const [lastProtected, setLastProtected] = useState(null);
   const [decryptFile, setDecryptFile] = useState(null);
   const [hermesStatus, setHermesStatus] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
+  const [recipientPublicKey, setRecipientPublicKey] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCapabilities() {
+      try {
+        const response = await fetch(`${API_BASE}/api/secure/capabilities`);
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!cancelled) setCapabilities(payload);
+      } catch {
+        // The main error surface is reserved for user-triggered operations.
+      }
+    }
+
+    void loadCapabilities();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function analyzeFile() {
     if (!file) return;
@@ -125,6 +147,9 @@ export default function SecureTransferPanel() {
     try {
       const form = new FormData();
       form.append("file", file);
+      if (recipientPublicKey.trim()) {
+        form.append("recipient_public_key", recipientPublicKey.trim());
+      }
       const response = await fetch(`${API_BASE}/api/secure/protect`, {
         method: "POST",
         body: form,
@@ -256,6 +281,33 @@ export default function SecureTransferPanel() {
               {file ? `${(file.size / 1024).toFixed(1)} KiB` : "Prototype limit: 25 MiB"}
             </p>
           </label>
+
+          <details className="mt-5 rounded-xl border border-slate-800 bg-slate-900/30 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-slate-300">
+              Recipient / multi-device options
+            </summary>
+            <div className="mt-4 space-y-3">
+              <p className="text-xs leading-relaxed text-slate-500">
+                Leave the field empty to protect for this AegisFlow installation. To send
+                to another AegisFlow device, paste that device&apos;s X25519 public key.
+              </p>
+              <textarea
+                rows={3}
+                value={recipientPublicKey}
+                onChange={(event) => setRecipientPublicKey(event.target.value)}
+                placeholder="Optional remote recipient public key (Base64)"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 font-mono text-xs text-slate-300 outline-none focus:border-blue-500/50"
+              />
+              {capabilities?.recipient_public_key && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                  <p className="text-xs text-slate-500">This device public key</p>
+                  <p className="mt-1 break-all font-mono text-xs text-slate-300">
+                    {capabilities.recipient_public_key}
+                  </p>
+                </div>
+              )}
+            </div>
+          </details>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <button
