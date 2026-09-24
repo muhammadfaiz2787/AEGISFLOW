@@ -44,7 +44,12 @@ function levelClass(level) {
 
 function readableMode(mode) {
   if (!mode) return "—";
-  if (mode.includes("hybrid_local_vision")) return "Local Vision + Metadata/Text";
+  const parts = [];
+  if (mode.includes("local_openclip_vision")) parts.push("OpenCLIP Vision");
+  if (mode.includes("local_document_text")) parts.push("Document Text");
+  if (mode.includes("plaintext")) parts.push("Plaintext");
+  if (mode.includes("metadata")) parts.push("Metadata");
+  if (parts.length) return parts.join(" + ");
   if (mode.includes("fallback")) return "Metadata/Text Fallback";
   return mode;
 }
@@ -85,6 +90,7 @@ export default function SecureTransferPanel() {
   const [error, setError] = useState("");
   const [lastProtected, setLastProtected] = useState(null);
   const [decryptFile, setDecryptFile] = useState(null);
+  const [hermesStatus, setHermesStatus] = useState(null);
 
   async function analyzeFile() {
     if (!file) return;
@@ -187,6 +193,16 @@ export default function SecureTransferPanel() {
   const context = analysis?.content_context;
   const decision = analysis?.decision;
   const profile = analysis?.security_profile;
+
+  async function checkHermesReadiness() {
+    try {
+      const response = await fetch(`${API_BASE}/api/integrations/hermes/v1/readiness`);
+      if (!response.ok) throw new Error("Hermes readiness check failed.");
+      setHermesStatus(await response.json());
+    } catch (err) {
+      setHermesStatus({ ready: false, error: err.message });
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10 lg:px-8">
@@ -303,6 +319,12 @@ export default function SecureTransferPanel() {
                 {context?.detected_mime?.startsWith("image/") && (
                   <InfoCard label="Vision Security Gate" value={readableVisionGate(context?.vision_status)} />
                 )}
+                {context?.document_status && context.document_status !== "not_applicable" && (
+                  <InfoCard
+                    label="Document Intelligence"
+                    value={`${String(context?.document_kind ?? "document").toUpperCase()} · ${context.document_status}`}
+                  />
+                )}
               </div>
 
               {context?.detected_mime?.startsWith("image/") && (
@@ -380,6 +402,38 @@ export default function SecureTransferPanel() {
             Decrypt & Download Original
           </button>
         </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/70 p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-400">
+              Hermes Integration
+            </p>
+            <h2 className="mt-1 font-semibold text-white">MCP adapter prepared</h2>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+              Hermes can orchestrate AegisFlow through a restricted MCP tool surface while
+              AegisFlow remains responsible for classification, policy decisions, and encryption.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={checkHermesReadiness}
+            className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300"
+          >
+            Check Hermes Readiness
+          </button>
+        </div>
+        {hermesStatus && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <InfoCard label="Adapter Ready" value={hermesStatus.ready ? "YES" : "NO"} />
+            <InfoCard label="Monitoring" value={hermesStatus.monitoring ? "ACTIVE" : "STOPPED"} />
+            <InfoCard
+              label="Backend"
+              value={hermesStatus.error ? `ERROR: ${hermesStatus.error}` : "READY"}
+            />
+          </div>
+        )}
       </section>
 
       <p className="mt-5 text-xs leading-relaxed text-slate-500">
