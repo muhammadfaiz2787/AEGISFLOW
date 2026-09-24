@@ -81,6 +81,7 @@ class AdaptiveSecureTransfer:
         device_trust: float,
         destination_trust: float,
         latency_sensitivity: float,
+        recipient_public_key: str | None = None,
     ):
         analysis = self.analyze(
             filename=filename,
@@ -98,6 +99,7 @@ class AdaptiveSecureTransfer:
             policy_name=analysis["decision"]["policy"],
             profile=profile,
             context=analysis["content_context"],
+            recipient_public_key_b64=recipient_public_key,
         )
         manifest["analysis"] = analysis
         return envelope, manifest
