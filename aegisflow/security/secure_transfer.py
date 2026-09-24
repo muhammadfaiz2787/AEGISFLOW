@@ -95,9 +95,23 @@ class SecureTransferService:
         policy_name: str,
         profile: SecurityProfile,
         context: Dict[str, object],
+        recipient_public_key_b64: str | None = None,
     ) -> Tuple[bytes, Dict[str, object]]:
         original_filename = Path(filename or "unnamed.bin").name
-        recipient_public = self.key_store.private_key.public_key()
+
+        if recipient_public_key_b64:
+            try:
+                recipient_public_bytes = _unb64(recipient_public_key_b64)
+                if len(recipient_public_bytes) != 32:
+                    raise ValueError("X25519 public key must decode to 32 bytes.")
+                recipient_public = x25519.X25519PublicKey.from_public_bytes(
+                    recipient_public_bytes
+                )
+            except Exception as exc:
+                raise ValueError("Invalid recipient X25519 public key.") from exc
+        else:
+            recipient_public = self.key_store.private_key.public_key()
+            recipient_public_bytes = self.key_store.public_key_bytes()
         ephemeral_private = x25519.X25519PrivateKey.generate()
         ephemeral_public = ephemeral_private.public_key()
 
@@ -119,6 +133,7 @@ class SecureTransferService:
             "policy": policy_name,
             "security_profile": profile.to_dict(),
             "content_context": context,
+            "recipient_public_key": _b64(recipient_public_bytes),
         }
         data_aad = _canonical_json(metadata)
         data_nonce = os.urandom(12)
@@ -150,7 +165,7 @@ class SecureTransferService:
             "policy": policy_name,
             "security_profile": profile.to_dict(),
             "content_context": context,
-            "recipient_public_key": self.key_store.public_key_b64(),
+            "recipient_public_key": _b64(recipient_public_bytes),
             "envelope_version": 1,
         }
         return envelope, manifest
