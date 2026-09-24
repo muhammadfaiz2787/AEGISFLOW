@@ -79,6 +79,7 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
         device_trust: float = Form(0.75),
         destination_trust: float = Form(0.75),
         latency_sensitivity: float = Form(0.50),
+        recipient_public_key: str | None = Form(None),
     ):
         runtime = get_runtime()
         content = await read_upload(file)
@@ -92,6 +93,7 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
                 device_trust=device_trust,
                 destination_trust=destination_trust,
                 latency_sensitivity=latency_sensitivity,
+                recipient_public_key=recipient_public_key,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
