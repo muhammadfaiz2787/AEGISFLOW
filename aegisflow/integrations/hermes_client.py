@@ -162,6 +162,7 @@ class HermesAegisFlowClient:
         device_trust: float = 0.75,
         destination_trust: float = 0.75,
         latency_sensitivity: float = 0.50,
+        recipient_public_key: str | None = None,
     ) -> dict[str, Any]:
         source = self._resolve_allowed_path(file_path, must_exist=True)
         target = self._resolve_allowed_path(
@@ -179,6 +180,8 @@ class HermesAegisFlowClient:
             "destination_trust": str(float(destination_trust)),
             "latency_sensitivity": str(float(latency_sensitivity)),
         }
+        if recipient_public_key:
+            data["recipient_public_key"] = recipient_public_key
         with source.open("rb") as handle, self._client() as client:
             response = client.post(
                 "/api/secure/protect",
