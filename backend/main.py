@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from aegisflow.service.live_intelligence import AegisFlowLiveService
+from backend.hermes_routes import build_hermes_router
 from backend.secure_transfer_routes import build_secure_transfer_router
 
 
@@ -83,7 +84,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AegisFlow API",
     description="Real-time adaptive security intelligence and secure transfer backend.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -106,7 +107,7 @@ app.add_middleware(
 async def root():
     return {
         "name": "AegisFlow",
-        "api_version": "0.2.0",
+        "api_version": "0.3.0",
         "status": "online",
         "secure_transfer": True,
     }
@@ -270,6 +271,13 @@ async def live_websocket(websocket: WebSocket):
 app.include_router(
     build_secure_transfer_router(
         get_service=get_service,
+        get_runtime=lambda: runtime,
+    )
+)
+
+
+app.include_router(
+    build_hermes_router(
         get_runtime=lambda: runtime,
     )
 )
