@@ -1,0 +1,33 @@
+# Add this block to ~/.hermes/config.yaml
+#
+# Replace the Windows paths below with your local AegisFlow checkout.
+# Hermes prefixes discovered tools with mcp_aegisflow_.
+#
+# Keeping trust: untrusted is recommended: write-capable protect/unprotect and
+# monitoring tools can then use Hermes' approval surface.
+
+mcp_servers:
+  aegisflow:
+    command: "D:\\VS CODE\\aegisflow\\.venv\\Scripts\\python.exe"
+    args:
+      - "-m"
+      - "aegisflow.integrations.hermes_mcp"
+    env:
+      AEGISFLOW_API_BASE: "http://127.0.0.1:8000"
+      AEGISFLOW_HERMES_ALLOWED_ROOT: "D:\\VS CODE\\aegisflow"
+    trust: "untrusted"
+    timeout: 120
+    connect_timeout: 60
+    supports_parallel_tool_calls: false
+    tools:
+      include:
+        - aegisflow_health
+        - aegisflow_status
+        - aegisflow_capabilities
+        - aegisflow_start_monitoring
+        - aegisflow_stop_monitoring
+        - aegisflow_analyze_file
+        - aegisflow_protect_file
+        - aegisflow_unprotect_file
+      resources: false
+      prompts: false
