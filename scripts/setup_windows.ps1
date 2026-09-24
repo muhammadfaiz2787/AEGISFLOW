@@ -17,16 +17,18 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 
 & $Python -m pip install --upgrade pip
-& $Python -m pip install -r requirements.txt
+$Extras = @()
+if (-not $SkipVision) { $Extras += "vision" }
+if (-not $SkipHermes) { $Extras += "hermes" }
 
-if (-not $SkipVision) {
-    Write-Host "Installing local OpenCLIP vision dependencies..."
-    & $Python -m pip install -r requirements-vision.txt
+if ($Extras.Count -gt 0) {
+    $ExtraSpec = ".[{0}]" -f ($Extras -join ",")
+    Write-Host "Installing AegisFlow editable package with extras: $($Extras -join ', ')..."
+    & $Python -m pip install -e $ExtraSpec
 }
-
-if (-not $SkipHermes) {
-    Write-Host "Installing Hermes MCP integration dependencies..."
-    & $Python -m pip install -r requirements-hermes.txt
+else {
+    Write-Host "Installing AegisFlow editable package..."
+    & $Python -m pip install -e .
 }
 
 Write-Host "Installing frontend dependencies..."
