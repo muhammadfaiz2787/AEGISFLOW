@@ -1,3 +1,4 @@
+import asyncio
 from __future__ import annotations
 
 import json
@@ -58,7 +59,8 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
         runtime = get_runtime()
         content = await read_upload(file)
         try:
-            return orchestrator().analyze(
+            return await asyncio.to_thread(
+                orchestrator().analyze,
                 filename=file.filename or "unnamed.bin",
                 content=content,
                 mime_type=file.content_type,
@@ -80,7 +82,8 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
         runtime = get_runtime()
         content = await read_upload(file)
         try:
-            envelope, manifest = orchestrator().protect(
+            envelope, manifest = await asyncio.to_thread(
+                orchestrator().protect,
                 filename=file.filename or "unnamed.bin",
                 content=content,
                 mime_type=file.content_type,
@@ -108,7 +111,10 @@ def build_secure_transfer_router(get_service: Callable, get_runtime: Callable) -
     async def unprotect_file(file: UploadFile = File(...)):
         envelope = await read_upload(file)
         try:
-            plaintext, metadata = orchestrator().unprotect(envelope)
+            plaintext, metadata = await asyncio.to_thread(
+                orchestrator().unprotect,
+                envelope,
+            )
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=f"Unable to decrypt envelope: {exc}") from exc
         except Exception as exc:
