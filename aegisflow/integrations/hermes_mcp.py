@@ -121,6 +121,7 @@ def aegisflow_protect_file(
     device_trust: float = 0.75,
     destination_trust: float = 0.75,
     latency_sensitivity: float = 0.50,
+    recipient_public_key: str | None = None,
 ) -> dict:
     """Adaptively encrypt an allowed local file and save an .aegis envelope.
 
@@ -132,6 +133,7 @@ def aegisflow_protect_file(
         device_trust=device_trust,
         destination_trust=destination_trust,
         latency_sensitivity=latency_sensitivity,
+        recipient_public_key=recipient_public_key,
     )
 
 
